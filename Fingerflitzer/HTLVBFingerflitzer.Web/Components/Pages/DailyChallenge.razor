@@ -1,0 +1,172 @@
+﻿@page "/daily-challenge"
+@using System.Web
+@using Microsoft.AspNetCore.Mvc.ViewFeatures
+@rendermode InteractiveServer
+@inject IJSRuntime JSRuntime
+@implements IAsyncDisposable
+
+<h3>DailyChallenge</h3>
+
+<div class="d-flex gap-2" style="font-family: monospace">
+    @foreach (TypingStateEntry entry in typingState)
+    {
+        string correctLetterClasses;
+
+        if (entry.Timestamp.HasValue)
+        {
+            if (entry.TypedLetter == entry.CorrectLetter)
+            {
+                if (entry.ErrorCount == 0)
+                {
+                    correctLetterClasses = "";
+                }
+                else
+                {
+                    correctLetterClasses = "text-info bg-info bg-opacity-25";
+                }
+            }
+            else
+            {
+                correctLetterClasses = "text-danger bg-danger bg-opacity-25";
+            }
+        }
+        else
+        {
+            correctLetterClasses = "opacity-25";
+        }
+
+        <div class="d-flex flex-column align-items-center">
+            <div>@entry.TypedLetterHtml</div>
+            <div class="fs-2 @correctLetterClasses">@entry.CorrectLetter</div>
+        </div>
+    }
+</div>
+
+@if (typingStateIndex >= typingState.Length)
+{
+    <div class="mt-4 fs-4 text-success">
+        Deine Tippgeschwindigkeit: @CalculateWPM() WPM
+    </div>
+}
+
+@code {
+    private IJSObjectReference? _handlerRef;
+
+    class TypingStateEntry
+    {
+        public DateTime? Timestamp { get; set; }
+        public char? TypedLetter { get; set; }
+        public int ErrorCount { get; set; } = 0;
+        public char CorrectLetter { get; }
+
+        public MarkupString TypedLetterHtml
+        {
+            get
+            {
+                if (TypedLetter == null || TypedLetter == CorrectLetter)
+                {
+                    return (MarkupString)"&nbsp;";
+                }
+                if (TypedLetter == ' ')
+                {
+                    return (MarkupString)"&blank;";
+                }
+
+                return (MarkupString)$"{TypedLetter}";
+            }
+        }
+
+        public TypingStateEntry(char correctLetter)
+        {
+            CorrectLetter = correctLetter;
+        }
+    }
+
+    TypingStateEntry[] typingState = GetEmptyTypingState("Welcome to HTLVB Fingerflitzer!");
+    int typingStateIndex = 0;
+
+    static TypingStateEntry[] GetEmptyTypingState(string text)
+    {
+        return text.Select(c => new TypingStateEntry(c)).ToArray();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _handlerRef = await JSRuntime.InvokeAsync<IJSObjectReference>(
+                "globalKeyHandler.initialize",
+                DotNetObjectReference.Create(this));
+        }
+    }
+
+    [JSInvokable]
+    public void OnKeyDown(string key)
+    {
+        if (typingStateIndex >= typingState.Length)
+        {
+            return;
+        }
+
+        if (key == "Backspace")
+        {
+            if (typingStateIndex > 0)
+            {
+                typingStateIndex--;
+            }
+            typingState[typingStateIndex].Timestamp = null;
+            typingState[typingStateIndex].TypedLetter = null;
+        }
+        else if (key.Length == 1)
+        {
+            typingState[typingStateIndex].Timestamp = DateTime.Now;
+            typingState[typingStateIndex].TypedLetter = key[0];
+
+            if (key[0] != typingState[typingStateIndex].CorrectLetter)
+            {
+                typingState[typingStateIndex].ErrorCount += 1;
+            }
+
+            typingStateIndex++;
+        }
+
+        StateHasChanged();
+    }
+
+    private double CalculateWPM()
+    {
+        var typedEntries = typingState
+            .Where(e => e.Timestamp.HasValue && e.TypedLetter == e.CorrectLetter)
+            .ToList();
+
+        if (typedEntries.Count == 0)
+        {
+            return 0;
+        }
+
+        DateTime startTime = typedEntries.First().Timestamp!.Value;
+        DateTime endTime = typedEntries.Last().Timestamp!.Value;
+
+        double durationMinutes = (endTime - startTime).TotalMinutes;
+
+        if (durationMinutes == 0)
+        {
+            return 0;
+        }
+
+        int correctCharacterCount = typedEntries.Count;
+
+        double wpm = (correctCharacterCount / 5.0) / durationMinutes;
+
+        return Math.Round(wpm, 2);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_handlerRef is not null)
+        {
+            await _handlerRef.InvokeVoidAsync("dispose");
+            await _handlerRef.DisposeAsync();
+        }
+    }
+}
